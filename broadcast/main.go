@@ -3,6 +3,7 @@ package main
 import (
   "encoding/json"
   "log"
+  "sync"
 
   maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -12,8 +13,10 @@ func main() {
   n := maelstrom.NewNode()
 
   received := map[int]bool{}
+  var mu sync.Mutex
 
   var my_neighbors []string
+
 
   type Broadcast struct {
     Message   int  `json:"message"`
@@ -26,13 +29,13 @@ func main() {
     if err := json.Unmarshal(msg.Body, &body); err != nil {
       return err
     }
-    log.Printf("Received %+v", body)
-
     val := int(body.Message)
     _, ok := received[val]
     if !ok { // If I didn't already have it, send it to everyone else
-      log.Printf("HELLO! NEW VALUE! %d", val)
+      //log.Printf("HELLO! NEW VALUE! %d", val)
+      mu.Lock()
       received[val] = true
+      mu.Unlock()
       for i := 0; i < len(my_neighbors); i++ {
         n.Send(my_neighbors[i],
           map[string]any{"type": "broadcast",
@@ -43,16 +46,26 @@ func main() {
   })
 
   n.Handle("broadcast_ok", func(msg maelstrom.Message) error {
-    log.Printf("HELLO! I guess that got delivered")
+    //log.Printf("HELLO! I guess that got delivered")
+    // This message just contains map[in_reply_to:0 type:broadcast_ok]
+    /*var body map[string]any
+    if err := json.Unmarshal(msg.Body, &body); err != nil {
+      return err
+    }
+    log.Printf("OK MESSAGE WAS %+v", body)
+    */
     return nil
   })
 
   // Handle read: return everything in the map.
   n.Handle("read", func(msg maelstrom.Message) error {
     var values []int
+    // TODO: how is performance? Make a copy instead?
+    mu.Lock()
     for k, _ := range received {
       values = append(values, k)
     }
+    mu.Unlock()
 
     return n.Reply(msg, map[string]any{
       "type": "read_ok",
