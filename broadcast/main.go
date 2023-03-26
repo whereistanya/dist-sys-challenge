@@ -12,10 +12,9 @@ func main() {
 
   n := maelstrom.NewNode()
 
-  received := map[int]bool{}
   var mu sync.Mutex
-
-  var my_neighbors []string
+  received := map[int]bool{}  // protected by mu
+  var my_neighbors []string   // protected by mu
 
 
   type Broadcast struct {
@@ -30,18 +29,17 @@ func main() {
       return err
     }
     val := int(body.Message)
+    mu.Lock()
     _, ok := received[val]
     if !ok { // If I didn't already have it, send it to everyone else
-      //log.Printf("HELLO! NEW VALUE! %d", val)
-      mu.Lock()
       received[val] = true
-      mu.Unlock()
       for i := 0; i < len(my_neighbors); i++ {
         n.Send(my_neighbors[i],
           map[string]any{"type": "broadcast",
                          "message": val})
       }
     }
+    mu.Unlock()
     return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
   })
 
@@ -89,7 +87,9 @@ func main() {
       return err
     }
     topo := body.Topology
+    mu.Lock()
     my_neighbors = topo[my_id]
+    mu.Unlock()
 
     return n.Reply(msg, map[string]string{"type": "topology_ok"})
   })
