@@ -2,11 +2,19 @@ package main
 
 import (
   "encoding/json"
+//  "errors"
   "log"
   "sync"
 
   maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
+
+type Outbox struct {
+
+}
+
+
+
 
 func main() {
 
@@ -15,13 +23,40 @@ func main() {
   var mu sync.Mutex
   received := map[int]bool{}  // protected by mu
   var my_neighbors []string   // protected by mu
+  outbox := map[string][]int{}   // protected by mu
+
+  // This is my broadcast message id, unrelated to the value I'm sending.
+  // I send the same message id to multiple nodes
+  next_message_id := 0          // protected by mu
+
+  // TODO: implement the resend functionality
+  // TODO: only need a separate broadcast id if I keep doing individual messages
 
 
   type Broadcast struct {
     Message   int  `json:"message"`
+    MsgId     int  `json:"msg_id"`
   }
 
-  // Handle broadcast: add to the received map.
+  /*type RPCBody struct {
+    Type  string  `json:"type"`
+    MsgID int     `json:"msg_id"`
+    InReplyTo int `json:"in_reply_to"`
+  }*/
+
+  // Handle RPC response
+  // TODO: Currently a no-op
+  handle_rpc_resp := func(msg maelstrom.Message) error {
+    var body map[string]any
+    if err := json.Unmarshal(msg.Body, &body); err != nil {
+      return err
+    }
+    log.Printf("%d", body["in_reply_to"])
+    log.Printf("OK MESSAGE WAS %+v", body)
+    return nil
+  }
+
+  // Handle broadcast message: add to the received map.
   n.Handle("broadcast", func(msg maelstrom.Message) error {
     var body Broadcast
 
@@ -29,18 +64,40 @@ func main() {
       return err
     }
     val := int(body.Message)
+    received_message_id := int(body.MsgId)
+
     mu.Lock()
     _, ok := received[val]
     if !ok { // If I didn't already have it, send it to everyone else
+
+      // TODO: extract this re-broadcast
       received[val] = true
       for i := 0; i < len(my_neighbors); i++ {
-        n.Send(my_neighbors[i],
-          map[string]any{"type": "broadcast",
-                         "message": val})
+        outbox[my_neighbors[i]] = append(outbox[my_neighbors[i]], val)
       }
     }
+
+    for i := 0; i < len(my_neighbors); i++ {
+      neighbor := my_neighbors[i]
+
+      // TODO: currently sending once for everything in the outbox; write a
+      // batch function.
+      for j := 0; i < len(outbox[neighbor]); i++ {
+        val := outbox[neighbor][j]
+        n.RPC(neighbor,
+              map[string]any{"type": "broadcast",
+                             "message": val,
+                             "msg_id": next_message_id},
+                             handle_rpc_resp)
+      }
+    }
+    next_message_id += 1
     mu.Unlock()
-    return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
+
+    // Reply that we successfully received this one.
+    return n.Reply(msg, map[string]any{
+       "type": "broadcast_ok",
+       "in_reply_to": received_message_id} )
   })
 
   n.Handle("broadcast_ok", func(msg maelstrom.Message) error {
@@ -52,6 +109,7 @@ func main() {
     }
     log.Printf("OK MESSAGE WAS %+v", body)
     */
+    //return errors.New("OMG ERROR")
     return nil
   })
 
